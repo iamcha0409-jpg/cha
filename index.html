@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>선불카드사 이용건수 자동 취합</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --ink: #1f2328; --muted: #6b7280;
+    --line: #e5e7eb; --accent: #2563eb; --accent-soft: #eff4ff; --code: #f3f4f6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); line-height: 1.65; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 18px 28px; }
+  header h1 { margin: 0; font-size: 19px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .wrap { display: grid; grid-template-columns: 260px 1fr; min-height: calc(100vh - 70px); }
+  nav { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 12px; overflow-y: auto; }
+  nav h2 { font-size: 11px; letter-spacing: .06em; color: var(--muted); margin: 18px 8px 6px; text-transform: uppercase; }
+  nav h2:first-child { margin-top: 0; }
+  nav a { display: block; padding: 6px 10px; border-radius: 6px; color: var(--ink); text-decoration: none; font-size: 14px; cursor: pointer; }
+  nav a:hover { background: var(--code); }
+  nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  nav a.dl::after { content: " ↓"; color: var(--muted); }
+  main { padding: 28px 40px 60px; max-width: 980px; }
+  .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .toolbar .path { color: var(--muted); font-size: 13px; }
+  button { font: inherit; font-size: 13px; padding: 6px 12px; border: 1px solid var(--line); background: var(--panel);
+           border-radius: 6px; cursor: pointer; }
+  button:hover { background: var(--code); }
+  article { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 28px 36px; }
+  article h1 { font-size: 24px; margin-top: 0; } article h2 { font-size: 19px; margin-top: 28px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  article h3 { font-size: 16px; }
+  article table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 14px; }
+  article th, article td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  article th { background: var(--code); }
+  article code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 90%; }
+  article pre { background: #111827; color: #e5e7eb; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 13px; line-height: 1.5; }
+  article pre code { background: none; padding: 0; color: inherit; }
+  article blockquote { margin: 12px 0; padding: 8px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: #374151; }
+  .files { display: grid; gap: 8px; }
+  .files a { display: flex; justify-content: space-between; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px;
+             color: var(--ink); text-decoration: none; font-size: 14px; }
+  .files a:hover { border-color: var(--accent); }
+  .files span { color: var(--muted); font-size: 12px; }
+  .err { color: #b91c1c; }
+  @media (max-width: 760px) { .wrap { grid-template-columns: 1fr; } nav { border-right: 0; border-bottom: 1px solid var(--line); } main { padding: 20px 14px; } article { padding: 20px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>선불카드사 이용건수 원천 데이터 자동 취합</h1>
+  <p>요구사항 문서 · 파워쿼리 코드 · 테스트데이터</p>
+</header>
+<div class="wrap">
+  <nav id="nav"></nav>
+  <main>
+    <div class="toolbar"><span class="path" id="path"></span><span id="actions"></span></div>
+    <article id="view">불러오는 중…</article>
+  </main>
+</div>
+<script>
+const DOCS = [
+  ["README.md", "개요"], ["BRD.md", "BRD (비즈니스 요구사항)"], ["PRD.md", "PRD (제품 요구사항)"],
+  ["구현가이드.md", "구현가이드"], ["검증기준_테스트케이스.md", "검증기준·테스트케이스"]
+];
+const QUERIES = ["0_설정","1_원천_파일목록","2_원천_전처리_1단계","3_원천_전처리_2단계","4_취합결과","5_검증","6_일별점유율","7_월별점유율","8_점유율현황"]
+  .map(n => ["파워쿼리/" + n + ".txt", n]);
+const TESTS = [
+  "T01_기본취합/2026-11-03_원천1.xlsx","T01_기본취합/2026-11-03_원천2.xlsx","T01_기본취합/2026-11-03_원천3.xlsx",
+  "T02_지난수치수정/2026-11-03_원천1.xlsx","T02_지난수치수정/2026-11-03_원천2.xlsx","T02_지난수치수정/2026-11-03_원천3.xlsx","T02_지난수치수정/2026-11-10_원천1.xlsx",
+  "T03_텍스트숫자/2026-11-03_원천1.xlsx","T04_새카드사/2026-11-03_원천1.xlsx",
+  "T05_임시파일/2026-11-03_원천1.xlsx","T05_임시파일/~$2026-11-03_원천1.xlsx",
+  "T06_하위폴더_다른형식/2026-11-03_원천1.xlsx","T06_하위폴더_다른형식/메모.csv","T06_하위폴더_다른형식/보관/2026-10-27_원천1.xlsx",
+  "T07_이름무관_수정시각우선/시스템다운로드.xlsx","T07_이름무관_수정시각우선/시스템다운로드 (1).xlsx",
+  "T07_파일명규칙위반/2026-11-03_원천1.xlsx","T07_파일명규칙위반/원천_최신.xlsx",
+  "T08_빈행_기준일없음/2026-11-03_원천1.xlsx","T09_형식오류/2026-11-03_원천1.xlsx","T10_빈칸/2026-11-03_원천1.xlsx",
+  "T11_시트없음/2026-11-03_원천1.xlsx","T12_필수열없음/2026-11-03_원천1.xlsx","T13_더미10건/2026-11-18_원천1.xlsx"
+].map(p => "테스트데이터/" + p);
+
+let BASE = "";
+const url = p => BASE + p.split("/").map(encodeURIComponent).join("/");
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function buildNav() {
+  let h = "<h2>문서</h2>" + DOCS.map(([f,t]) => `<a data-k="doc:${f}">${t}</a>`).join("");
+  h += "<h2>파워쿼리 (M 코드)</h2>" + QUERIES.map(([f,t]) => `<a data-k="q:${f}">${t}</a>`).join("");
+  h += "<h2>엑셀 파일</h2>";
+  h += `<a class="dl" href="${url("양식_미리보기.xlsx")}" download>양식_미리보기.xlsx</a>`;
+  h += `<a class="dl" href="${url("테스트데이터/기대결과.xlsx")}" download>기대결과.xlsx</a>`;
+  h += `<a data-k="tests">테스트데이터 (T01~T13)</a>`;
+  $("nav").innerHTML = h;
+  $("nav").querySelectorAll("a[data-k]").forEach(a => a.onclick = () => { location.hash = a.dataset.k; });
+}
+
+async function getText(p) {
+  const r = await fetch(url(p));
+  if (!r.ok) throw new Error(r.status);
+  return r.text();
+}
+
+async function route() {
+  const k = decodeURIComponent(location.hash.slice(1)) || "doc:README.md";
+  $("nav").querySelectorAll("a[data-k]").forEach(a => a.classList.toggle("active", a.dataset.k === k));
+  $("actions").innerHTML = ""; $("view").innerHTML = "불러오는 중…";
+  try {
+    if (k.startsWith("doc:")) {
+      const f = k.slice(4); $("path").textContent = f;
+      $("view").innerHTML = marked.parse(await getText(f));
+      $("view").querySelectorAll("a[href]").forEach(a => {
+        const h = a.getAttribute("href").replace(/^\.\//, "");
+        if (DOCS.some(([d]) => d === h)) { a.href = "#doc:" + h; }
+      });
+    } else if (k.startsWith("q:")) {
+      const f = k.slice(2); $("path").textContent = f;
+      const t = await getText(f);
+      $("view").innerHTML = `<h1>${esc(f.split("/").pop().replace(".txt",""))}</h1><pre><code>${esc(t)}</code></pre>`;
+      $("actions").innerHTML = `<button id="cp">코드 복사</button> <a href="${url(f)}" download><button>내려받기</button></a>`;
+      $("cp").onclick = async () => { await navigator.clipboard.writeText(t); $("cp").textContent = "복사됨"; };
+    } else if (k === "tests") {
+      $("path").textContent = "테스트데이터/";
+      $("view").innerHTML = "<h1>테스트데이터</h1><p>케이스별 원천 파일입니다. 각 케이스의 의도는 <a href='#doc:검증기준_테스트케이스.md'>검증기준·테스트케이스</a> 문서를 참고하세요. 수치는 모두 가짜 값입니다.</p><div class='files'>" +
+        TESTS.map(p => `<a href="${url(p)}" download><b>${esc(p.replace("테스트데이터/",""))}</b><span>내려받기</span></a>`).join("") + "</div>";
+    }
+  } catch (e) {
+    $("view").innerHTML = `<p class="err">파일을 불러오지 못했습니다 (${esc(String(e.message))}).</p>`;
+  }
+}
+
+(async () => {
+  try { const r = await fetch("repo/README.md", { method: "HEAD" }); if (r.ok) BASE = "repo/"; } catch (e) {}
+  buildNav(); route();
+  window.addEventListener("hashchange", route);
+})();
+</script>
+</body>
+</html>
