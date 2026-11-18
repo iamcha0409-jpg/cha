@@ -1,0 +1,43 @@
+﻿// [쿼리 이름: 일별점유율]  5단계
+// 기능: F8 카드사별 일별 이용건수 + 점유율
+// 계산: 점유율 = 그날 카드사 이용건수 ÷ 그날 전체 카드사 이용건수 합계
+// 결과: 기준일 | 선불카드사1~4 건수 | 건수 합계 | 선불카드사1~4 점유율 | 점유율 합계 | 상태
+let
+    원본 = 취합결과,
+    카드사목록 = List.Sort(List.Distinct(원본[카드사])),
+    건수열 = List.Transform(카드사목록, each _ & " 건수"),
+    율열 = List.Transform(카드사목록, each _ & " 점유율"),
+
+    // 기준일마다 묶어서 그날 합계로 나눕니다.
+    묶음 = Table.Group(원본, {"기준일"}, {{"행", each _, type table}}),
+    점유율추가 = Table.AddColumn(묶음, "계산", each
+        let
+            그날 = [행],
+            합 = List.Sum(그날[이용건수])
+        in
+            Table.AddColumn(그날, "점유율", (r) => if 합 = null or 합 = 0 then null else r[이용건수] / 합, type number)),
+    세로형 = Table.SelectColumns(Table.Combine(점유율추가[계산]), {"기준일", "카드사", "이용건수", "점유율"}),
+
+    // 카드사를 열로 펼칩니다 (건수용, 점유율용 따로 펼친 뒤 기준일로 붙임).
+    건수가로 = Table.Pivot(
+        Table.TransformColumns(Table.RemoveColumns(세로형, {"점유율"}), {{"카드사", each _ & " 건수", type text}}),
+        건수열, "카드사", "이용건수"),
+    율가로 = Table.Pivot(
+        Table.TransformColumns(Table.RemoveColumns(세로형, {"이용건수"}), {{"카드사", each _ & " 점유율", type text}}),
+        율열, "카드사", "점유율"),
+    합침 = Table.ExpandTableColumn(
+        Table.NestedJoin(건수가로, {"기준일"}, 율가로, {"기준일"}, "율", JoinKind.LeftOuter), "율", 율열),
+
+    건수합 = Table.AddColumn(합침, "건수 합계", each List.Sum(List.Transform(건수열, (c) => Record.Field(_, c))), Int64.Type),
+    율합 = Table.AddColumn(건수합, "점유율 합계", each List.Sum(List.Transform(율열, (c) => Record.Field(_, c))), type number),
+    상태 = Table.AddColumn(율합, "상태", each
+        if List.NonNullCount(List.Transform(율열, (c) => Record.Field(_, c))) < List.Count(카드사목록)
+        then "카드사 누락" else "정상", type text),
+    순서 = Table.SelectColumns(상태, {"기준일"} & 건수열 & {"건수 합계"} & 율열 & {"점유율 합계", "상태"}),
+    형식 = Table.TransformColumnTypes(순서,
+        {{"기준일", type date}}
+        & List.Transform(건수열 & {"건수 합계"}, each {_, Int64.Type})
+        & List.Transform(율열 & {"점유율 합계"}, each {_, Percentage.Type})),
+    정렬 = Table.Sort(형식, {{"기준일", Order.Ascending}})
+in
+    정렬

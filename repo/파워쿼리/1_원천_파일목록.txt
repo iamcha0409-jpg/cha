@@ -1,0 +1,16 @@
+﻿// [쿼리 이름: 원천_파일목록]  1단계 MVP
+// 기능: F1 폴더 읽기 + F2 임시 파일(~$)·하위 폴더 제외
+// 결과: 원천 폴더 최상위 파일 목록 (Name | Extension | Content | 수정시각)
+// ※ 최신 파일 판단은 파일 이름이 아니라 '수정시각'(내려받은 시각)으로 합니다.
+// ※ 폴더를 직접 읽는 쿼리는 이것 하나뿐입니다. (다른 쿼리는 이 쿼리를 참조)
+let
+    폴더원본 = 설정[원천폴더],
+    폴더 = Text.Lower(if Text.EndsWith(폴더원본, "\") then 폴더원본 else 폴더원본 & "\"),
+    파일목록 = Folder.Files(폴더원본),
+    최상위만 = Table.SelectRows(파일목록, each
+        Text.Lower([Folder Path]) = 폴더 and not Text.StartsWith([Name], "~$")),
+    결과 = Table.RenameColumns(
+        Table.SelectColumns(최상위만, {"Name", "Extension", "Content", "Date modified"}),
+        {{"Date modified", "수정시각"}})
+in
+    결과

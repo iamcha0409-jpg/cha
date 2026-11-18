@@ -1,0 +1,54 @@
+﻿// [쿼리 이름: 점유율현황]  6단계
+// 기능: F10 일별 이용건수·점유율 + 그달 마지막 기준일 바로 아래에 월 합계 줄
+//       F12 전날(달력 기준)보다 이용건수가 2배를 넘게 늘어난 카드사를 마지막 열에 표시 → 조건부 서식으로 음영
+// 결과: 구분 | 기준일 | 선불카드사1~4 건수 | 건수 합계 | 선불카드사1~4 점유율 | 점유율 합계 | 상태 | 전일대비 2배 초과
+//       구분이 "월"인 줄 = 그달 건수 합계와 월 점유율 (그달 카드사 건수 합 ÷ 그달 전체 합)
+let
+    일 = 일별점유율,
+    월 = 월별점유율,
+    율열 = List.Select(Table.ColumnNames(일), each Text.EndsWith(_, " 점유율") and _ <> "점유율 합계"),
+    카드사목록 = List.Transform(율열, each Text.Start(_, Text.Length(_) - Text.Length(" 점유율"))),
+    건수열 = List.Transform(카드사목록, each _ & " 건수"),
+
+    // 일 줄: 기준일을 "yyyy-MM-dd" 글자로 바꾸고, 정렬키 = 월|0|날짜
+    일행 = Table.AddColumn(
+        Table.AddColumn(
+            Table.TransformColumns(Table.AddColumn(일, "월키", each Date.ToText([기준일], "yyyy-MM"), type text),
+                {{"기준일", each Date.ToText(_, "yyyy-MM-dd"), type text}}),
+            "구분", each "일", type text),
+        "정렬키", each [월키] & "|0|" & [기준일], type text),
+
+    // 월 줄: 정렬키 = 월|1|  → 그달 마지막 날 바로 뒤에 옵니다
+    월행0 = Table.AddColumn(월, "기준일", each [월] & " 월 합계", type text),
+    월행1 = Table.AddColumn(월행0, "상태", each
+        "기준일 " & Text.From([기준일수]) & "일"
+        & (if [카드사누락일수] > 0 then ", 카드사 누락 " & Text.From([카드사누락일수]) & "일" else ""), type text),
+    월행2 = Table.AddColumn(월행1, "구분", each "월", type text),
+    월행 = Table.AddColumn(월행2, "정렬키", each [월] & "|1|", type text),
+
+    // F12: 전날 값을 하루 뒤로 옮겨 붙인 뒤, 오늘 > 전날 × 2 인 카드사를 찾습니다.
+    건수 = Table.SelectColumns(취합결과, {"기준일", "카드사", "이용건수"}),
+    전날 = Table.RenameColumns(
+        Table.TransformColumns(건수, {{"기준일", each Date.AddDays(_, 1), type date}}),
+        {{"이용건수", "전일건수"}}),
+    비교 = Table.ExpandTableColumn(
+        Table.NestedJoin(건수, {"기준일", "카드사"}, 전날, {"기준일", "카드사"}, "전날", JoinKind.Inner),
+        "전날", {"전일건수"}),
+    급증 = Table.SelectRows(비교, each [이용건수] > 2 * [전일건수]),
+    급증목록 = Table.Group(급증, {"기준일"}, {{"전일대비 2배 초과", each Text.Combine(List.Sort([카드사]), ", "), type text}}),
+    급증글 = Table.TransformColumns(급증목록, {{"기준일", each Date.ToText(_, "yyyy-MM-dd"), type text}}),
+    일행급증 = Table.ExpandTableColumn(
+        Table.NestedJoin(일행, {"기준일"}, 급증글, {"기준일"}, "급증", JoinKind.LeftOuter),
+        "급증", {"전일대비 2배 초과"}),
+    월행급증 = Table.AddColumn(월행, "전일대비 2배 초과", each null, type text),
+
+    열 = {"정렬키", "구분", "기준일"} & 건수열 & {"건수 합계"} & 율열 & {"점유율 합계", "상태", "전일대비 2배 초과"},
+    합침 = Table.Combine({Table.SelectColumns(일행급증, 열), Table.SelectColumns(월행급증, 열)}),
+    정렬 = Table.Sort(합침, {{"정렬키", Order.Ascending}}),
+    결과 = Table.RemoveColumns(정렬, {"정렬키"}),
+    형식 = Table.TransformColumnTypes(결과,
+        List.Transform(건수열 & {"건수 합계"}, each {_, Int64.Type})
+        & List.Transform(율열 & {"점유율 합계"}, each {_, Percentage.Type})
+        & {{"구분", type text}, {"기준일", type text}, {"상태", type text}, {"전일대비 2배 초과", type text}})
+in
+    형식

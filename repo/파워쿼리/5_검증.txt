@@ -1,0 +1,55 @@
+﻿// [쿼리 이름: 검증]  4단계
+// 기능: F7 결과 자동 점검. 새로고침할 때마다 다시 계산됩니다.
+// 결과: 항목 | 값 | 판정   (맨 아래 "종합 판정"이 "정상"이면 통과)
+let
+    최상위 = 원천_파일목록,
+    읽은파일 = Table.SelectRows(최상위, each Text.Lower([Extension]) = ".xlsx")[Name],
+    제외파일 = Table.SelectRows(최상위, each Text.Lower([Extension]) <> ".xlsx")[Name],
+
+    전처리 = 원천_전처리,
+    결과 = 취합결과,
+
+    형식오류 = Table.RowCount(Table.SelectRowsWithErrors(전처리, {"기준일", "이용건수"})),
+    정상행 = Table.RemoveRowsWithErrors(전처리, {"기준일", "이용건수"}),
+    기준일없음 = Table.RowCount(Table.SelectRows(정상행, each [기준일] = null)),
+    유효행 = Table.SelectRows(정상행, each [기준일] <> null),
+    음수값 = Table.RowCount(Table.SelectRows(유효행, each [이용건수] < 0)),
+
+    // 같은 기준일·카드사가 여러 파일에 있는지, 그중 값이 달라진(수정된) 것이 있는지
+    키별 = Table.Group(유효행, {"기준일", "카드사"}, {
+        {"건수", each Table.RowCount(_), Int64.Type},
+        {"값종류", each List.Count(List.Distinct([이용건수])), Int64.Type}}),
+    겹친값 = Table.RowCount(Table.SelectRows(키별, each [건수] > 1)),
+    수정값 = Table.RowCount(Table.SelectRows(키별, each [값종류] > 1)),
+
+    중복키 = Table.RowCount(결과) - Table.RowCount(Table.Distinct(결과, {"기준일", "카드사"})),
+    카드사목록 = List.Sort(List.Distinct(결과[카드사])),
+    기준일별 = Table.Group(결과, {"기준일"}, {{"카드사수", each Table.RowCount(_), Int64.Type}}),
+    카드사누락 = Table.RowCount(Table.SelectRows(기준일별, each [카드사수] < List.Count(카드사목록))),
+    최소일 = List.Min(결과[기준일]),
+    최대일 = List.Max(결과[기준일]),
+    날짜글 = (d) => if d = null then "-" else Date.ToText(d, "yyyy-MM-dd"),
+
+    판정0 = (n as number) as text => if n = 0 then "정상" else "확인 필요",
+    목록글 = (l as list) as text => Text.From(List.Count(l)) &
+        (if List.IsEmpty(l) then "" else " (" & Text.Combine(l, ", ") & ")"),
+
+    항목 = #table(type table [항목 = text, 값 = text, 판정 = text], {
+        {"읽은 파일 수", Text.From(List.Count(읽은파일)), "참고"},
+        {"제외된 파일 (.xlsx 아님)", 목록글(제외파일), 판정0(List.Count(제외파일))},
+        {"형식 오류 값", Text.From(형식오류), 판정0(형식오류)},
+        {"기준일 없는 값", Text.From(기준일없음), 판정0(기준일없음)},
+        {"음수 값 (결과에서 제외)", Text.From(음수값), 판정0(음수값)},
+        {"카드사 누락 기준일", Text.From(카드사누락), 판정0(카드사누락)},
+        {"기준일·카드사 중복", Text.From(중복키), if 중복키 = 0 then "정상" else "오류"},
+        {"여러 파일에 겹친 값", Text.From(겹친값), "참고"},
+        {"수정 반영된 값", Text.From(수정값), "참고"},
+        {"결과 행 수", Text.From(Table.RowCount(결과)), "참고"},
+        {"기준일 범위", 날짜글(최소일) & " ~ " & 날짜글(최대일), "참고"},
+        {"카드사 목록", Text.Combine(카드사목록, ", "), "참고"}
+    }),
+    종합 = if List.AllTrue(List.Transform(항목[판정], each _ = "정상" or _ = "참고"))
+        then "정상" else "확인 필요",
+    최종 = Table.InsertRows(항목, Table.RowCount(항목), {[항목 = "종합 판정", 값 = "", 판정 = 종합]})
+in
+    최종

@@ -1,0 +1,23 @@
+﻿// [쿼리 이름: 취합결과]  3단계
+// 기능: F5 최신값 우선 + F6 누적 + F11 음수 값 제외
+// 결과: 기준일 | 카드사 | 이용건수 | Source.Name  (기준일·카드사마다 1행)
+let
+    원본 = 원천_전처리,
+
+    // 형식 오류 값과 기준일 없는 값은 결과에서 뺍니다(개수는 "검증" 시트에 표시).
+    정상행 = Table.RemoveRowsWithErrors(원본, {"기준일", "이용건수"}),
+    기준일있음 = Table.SelectRows(정상행, each [기준일] <> null),
+
+    // F5: 수정시각(내려받은 시각)이 늦은 파일 → 같으면 파일 이름 역순으로 정렬.
+    // Table.Buffer 로 정렬 순서를 고정해야 다음 단계에서 "첫 행 = 최신 값"이 보장됩니다.
+    정렬 = Table.Buffer(Table.Sort(기준일있음,
+        {{"수정시각", Order.Descending}, {"Source.Name", Order.Descending}})),
+    최신값 = Table.Distinct(정렬, {"기준일", "카드사"}),
+
+    // F11: 최신 값이 음수면 제외합니다 (최신값을 고른 뒤에 빼야 예전 파일 값이 대신 올라오지 않음).
+    음수제외 = Table.SelectRows(최신값, each [이용건수] >= 0),
+
+    열선택 = Table.SelectColumns(음수제외, {"기준일", "카드사", "이용건수", "Source.Name"}),
+    결과 = Table.Sort(열선택, {{"기준일", Order.Ascending}, {"카드사", Order.Ascending}})
+in
+    결과

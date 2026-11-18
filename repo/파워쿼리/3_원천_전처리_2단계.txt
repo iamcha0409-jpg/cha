@@ -1,0 +1,53 @@
+﻿// [쿼리 이름: 원천_전처리]  2단계 (1단계 코드를 이것으로 통째로 바꿔 붙여넣기)
+// 기능: 1단계(F1·F2·F3) + F4 세로형 변환
+// 결과: Source.Name | 수정시각 | 기준일 | 카드사 | 이용건수
+let
+    // F1: 원천_파일목록에서 .xlsx 파일만 사용
+    대상파일 = Table.SelectRows(원천_파일목록, each Text.Lower([Extension]) = ".xlsx"),
+    파일확인 = if Table.IsEmpty(대상파일)
+        then error Error.Record("파일 없음", "원천 폴더에 읽을 .xlsx 파일이 없습니다: " & 설정[원천폴더])
+        else 대상파일,
+
+    // 파일 하나에서 지정 시트를 읽고, 시트·필수 열이 없으면 파일명과 함께 오류를 냅니다.
+    시트읽기 = (내용 as binary, 파일명 as text) as table =>
+        let
+            통합문서 = Excel.Workbook(내용, true),
+            찾은시트 = Table.SelectRows(통합문서, each [Kind] = "Sheet" and [Name] = 설정[시트이름]),
+            데이터 = if Table.IsEmpty(찾은시트)
+                then error Error.Record("시트 없음",
+                    파일명 & ": '" & 설정[시트이름] & "' 시트를 찾을 수 없습니다.")
+                else 찾은시트{0}[Data],
+            빠진열 = List.Difference(설정[필수열], Table.ColumnNames(데이터)),
+            확인됨 = if List.IsEmpty(빠진열)
+                then 데이터
+                else error Error.Record("필수 열 없음",
+                    파일명 & ": 필수 열이 없습니다 → " & Text.Combine(빠진열, ", "))
+        in
+            확인됨,
+
+    파일별 = Table.AddColumn(파일확인, "데이터", each 시트읽기([Content], [Name])),
+    필요열 = Table.TransformColumnTypes(
+        Table.SelectColumns(파일별, {"Name", "수정시각", "데이터"}), {{"수정시각", type datetime}}),
+    이름변경 = Table.RenameColumns(필요열, {{"Name", "Source.Name"}}),
+
+    // 모든 파일의 열을 합칩니다(선불카드사5 같은 새 열도 포함). 머리글이 빈 열(Column6 등)은 제외.
+    전체열 = List.Distinct(List.Combine(List.Transform(이름변경[데이터], Table.ColumnNames))),
+    데이터열 = List.Select(전체열, each not (Text.StartsWith(_, "Column")
+        and (try Number.From(Text.Range(_, 6)) otherwise null) <> null)),
+    카드사열 = List.Difference(데이터열, {"기준일"}),
+    펼치기 = Table.ExpandTableColumn(이름변경, "데이터", 데이터열),
+
+    // 완전히 빈 행 제거
+    빈행제거 = Table.SelectRows(펼치기, each
+        try List.NonNullCount(List.Transform(데이터열, (열) => Record.Field(_, 열))) > 0
+        otherwise true),
+
+    // F3: 기준일 → 날짜, 카드사 열 → 정수 ("1,200" 같은 텍스트 숫자도 변환)
+    형식지정 = Table.TransformColumnTypes(빈행제거,
+        {{"기준일", type date}} & List.Transform(카드사열, each {_, Int64.Type}), "ko-KR"),
+
+    // F4: 세로형 변환 (기준일 | 카드사 | 이용건수). 빈 칸 값은 행이 생기지 않습니다.
+    세로형 = Table.UnpivotOtherColumns(형식지정, {"Source.Name", "수정시각", "기준일"}, "카드사", "이용건수"),
+    세로형형식 = Table.TransformColumnTypes(세로형, {{"카드사", type text}, {"이용건수", Int64.Type}})
+in
+    세로형형식

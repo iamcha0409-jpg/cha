@@ -1,0 +1,52 @@
+﻿// [쿼리 이름: 월별점유율]  5단계
+// 기능: F9 카드사별 월별 이용건수 합계 + 점유율
+// 계산: 점유율 = 그달 카드사 이용건수 합계 ÷ 그달 전체 카드사 이용건수 합계
+// 결과: 월 | 선불카드사1~4 건수 | 건수 합계 | 선불카드사1~4 점유율 | 점유율 합계 | 기준일수 | 카드사누락일수
+let
+    원본 = 취합결과,
+    카드사목록 = List.Sort(List.Distinct(원본[카드사])),
+    건수열 = List.Transform(카드사목록, each _ & " 건수"),
+    율열 = List.Transform(카드사목록, each _ & " 점유율"),
+    월추가 = Table.AddColumn(원본, "월", each Date.ToText([기준일], "yyyy-MM"), type text),
+
+    // 월·카드사별 이용건수 합계
+    월카드사 = Table.Group(월추가, {"월", "카드사"}, {{"이용건수", each List.Sum([이용건수]), type number}}),
+
+    // 월마다 묶어서 그달 합계로 나눕니다.
+    묶음 = Table.Group(월카드사, {"월"}, {{"행", each _, type table}}),
+    점유율추가 = Table.AddColumn(묶음, "계산", each
+        let
+            그달 = [행],
+            합 = List.Sum(그달[이용건수])
+        in
+            Table.AddColumn(그달, "점유율", (r) => if 합 = null or 합 = 0 then null else r[이용건수] / 합, type number)),
+    세로형 = Table.SelectColumns(Table.Combine(점유율추가[계산]), {"월", "카드사", "이용건수", "점유율"}),
+
+    건수가로 = Table.Pivot(
+        Table.TransformColumns(Table.RemoveColumns(세로형, {"점유율"}), {{"카드사", each _ & " 건수", type text}}),
+        건수열, "카드사", "이용건수"),
+    율가로 = Table.Pivot(
+        Table.TransformColumns(Table.RemoveColumns(세로형, {"이용건수"}), {{"카드사", each _ & " 점유율", type text}}),
+        율열, "카드사", "점유율"),
+    합침 = Table.ExpandTableColumn(
+        Table.NestedJoin(건수가로, {"월"}, 율가로, {"월"}, "율", JoinKind.LeftOuter), "율", 율열),
+    건수합 = Table.AddColumn(합침, "건수 합계", each List.Sum(List.Transform(건수열, (c) => Record.Field(_, c))), Int64.Type),
+    율합 = Table.AddColumn(건수합, "점유율 합계", each List.Sum(List.Transform(율열, (c) => Record.Field(_, c))), type number),
+
+    // 그달에 데이터가 있는 날 수, 그중 카드사가 빠진 날 수 (점유율 해석 시 참고)
+    일별 = Table.Group(월추가, {"월", "기준일"}, {{"카드사수", each Table.RowCount(_), Int64.Type}}),
+    월품질 = Table.Group(일별, {"월"}, {
+        {"기준일수", each Table.RowCount(_), Int64.Type},
+        {"카드사누락일수", each List.Count(List.Select([카드사수], (n) => n < List.Count(카드사목록))), Int64.Type}}),
+    품질합침 = Table.ExpandTableColumn(
+        Table.NestedJoin(율합, {"월"}, 월품질, {"월"}, "품질", JoinKind.LeftOuter),
+        "품질", {"기준일수", "카드사누락일수"}),
+    순서 = Table.SelectColumns(품질합침,
+        {"월"} & 건수열 & {"건수 합계"} & 율열 & {"점유율 합계", "기준일수", "카드사누락일수"}),
+    형식 = Table.TransformColumnTypes(순서,
+        List.Transform(건수열 & {"건수 합계"}, each {_, Int64.Type})
+        & List.Transform(율열 & {"점유율 합계"}, each {_, Percentage.Type})
+        & {{"월", type text}, {"기준일수", Int64.Type}, {"카드사누락일수", Int64.Type}}),
+    정렬 = Table.Sort(형식, {{"월", Order.Ascending}})
+in
+    정렬
